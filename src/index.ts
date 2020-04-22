@@ -1,20 +1,13 @@
 import { Client } from 'pg'
-import { PgTools, ConnectionOptions } from './pg-tools'
-const colors = require('colors/safe')
-const { program } = require('commander')
-
-const logOK = () => {
-  console.log('✅ > ', colors.green('Успешно.'))
-}
-
-const logInfo = (text: string) => {
-  console.log('♿ > ', colors.blue(text))
-}
-
-const logError = (text: string) => {
-  console.log('😈 > ', colors.red(text))
-  throw new Error('Рестор не выполнен. Проверьте параметры.')
-}
+import { PgTools } from './pg-tools'
+import { checkFileExists } from './fs'
+import { logError, logInfo, logOK } from './logger'
+import json5 = require('json5')
+import fs = require('fs')
+import path = require('path')
+import merge = require('deepmerge')
+import commander = require('commander')
+import prompts = require('prompts');
 
 interface DBconfig {
   host: string,
@@ -68,7 +61,7 @@ async function createDB (client: Client, dbName: string) {
 async function restoreDBFromFile (dbConfig: DBconfig, dbToRestoreName: string, pathToSqlFile: string) {
   try {
     logInfo(`Восстанавливаю данные в "${dbToRestoreName}" из "${pathToSqlFile}"`)
-    const options: ConnectionOptions = {
+    const options = {
       ...dbConfig,
       database: dbToRestoreName
     }
@@ -99,21 +92,110 @@ async function restoreDB (dbConfig: DBconfig, dbNameToRestore: string, pathToSql
   await restoreDBFromFile(dbConfig, dbNameToRestore, pathToSqlFile)
 }
 
-program.version(process.env.npm_package_version)
-  .command('r <sqlFilePath> [nameDbToRestore]')
-  .option('-h, --host <value>', 'host of db', 'localhost')
-  .option('-U, --user <value>', 'username', 'postgres')
-  .requiredOption('-p, --password <value>', 'db user password', 'postgres')
-  .option('-t, --port <value>', 'db port', 5432)
-  .action((pathToSqlFile: string, nameDbToRestore: string, cmdObj: any) => {
-    const connectionOptions: ConnectionOptions = {
-      host: cmdObj.host,
-      port: cmdObj.port,
-      database: 'postgres',
-      user: cmdObj.user,
-      password: cmdObj.password
-    }
-    restoreDB(connectionOptions, nameDbToRestore, pathToSqlFile)
-  })
+interface AppConfig {
+  db: {
+    host: string,
+    port: string,
+    user: string,
+    password?: string,
+    name?: string
+  }
+}
 
-program.parse(process.argv)
+function getDefaultConfig ():AppConfig {
+  return {
+    db: {
+      user: 'postgres',
+      password: '',
+      host: 'localhost',
+      port: '5432'
+    }
+  }
+}
+
+function readConfigFile (): Promise<string> {
+  return new Promise((resolve, reject) => {
+    fs.readFile(path.resolve('pg-toolkit.config.json5'), (err, data: Buffer) => {
+      if (err) {
+        return reject(err)
+      }
+      return resolve(data.toString())
+    })
+  })
+}
+
+async function getConfig () {
+  const defaultConfig = getDefaultConfig()
+  const configFileData = await readConfigFile()
+  const fileConfigObject = json5.parse(configFileData)
+  return merge(defaultConfig, fileConfigObject)
+}
+
+async function main () {
+  const config = await getConfig()
+
+  commander.program.version(process.env.npm_package_version)
+    .command('dnr [sqlFilePath]')
+    .option('-d, --database <value>', 'name of db', config.db.name)
+    .option('-h, --host <value>', 'host of db', config.db.host)
+    .option('-t, --port <value>', 'db port', config.db.port)
+    .option('-U, --user <value>', 'username of db', config.db.user)
+    .option('-p, --request-password', 'db user password')
+    .option('-l, --log', 'logging', false)
+    .option('-y, --yes-all', 'yes to all', false)
+    .action(async (pathToSqlFile: string, cmdObj: any) => {
+      let dbPassword = config.db.password
+      if (cmdObj.requestPassword) {
+        const response = await prompts([
+          {
+            type: 'invisible',
+            name: 'password',
+            message: `Веедите пароль для пользователя ${cmdObj.user}:`,
+            initial: false
+          }
+        ])
+        dbPassword = response.password
+      }
+      if (!dbPassword) {
+        logInfo('Password of db is empty!')
+      }
+      const isExists = await checkFileExists(pathToSqlFile)
+      if (!isExists) {
+        logError(`file "${pathToSqlFile}" is not exists`)
+      }
+      const connectionOptions = {
+        host: cmdObj.host,
+        port: parseInt(cmdObj.port, 10),
+        database: 'postgres',
+        user: cmdObj.user,
+        password: dbPassword
+      }
+      const targetDbName = cmdObj.database
+
+      logInfo(`Буду дропать и потом восстанавливать базу "${targetDbName}" из файла "${pathToSqlFile}"`)
+      if (cmdObj.log) {
+        logInfo('Параметры подключения:')
+        console.log(connectionOptions)
+      }
+
+      if (cmdObj.yesAll) {
+        restoreDB(connectionOptions, targetDbName, pathToSqlFile)
+      } else {
+        const response = await prompts([
+          {
+            type: 'confirm',
+            name: 'isNeedBegin',
+            message: 'Начинаем?',
+            initial: false
+          }
+        ])
+        if (response.isNeedBegin) {
+          restoreDB(connectionOptions, targetDbName, pathToSqlFile)
+        }
+      }
+    })
+
+  commander.program.parse(process.argv)
+}
+
+main()

@@ -1,2 +1,3 @@
 node_modules
 *.sql
+pg-toolkit.config.json5

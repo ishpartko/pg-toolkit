@@ -1,6 +1,6 @@
 'use strict'
-import fs from 'fs'
 import { exec } from 'child_process'
+import { checkFileExists } from './fs'
 
 export interface ConnectionOptions {
   host: string,
@@ -24,7 +24,6 @@ export class PgTools implements IPgTools {
   constructor (connectionOptions: ConnectionOptions) {
     this.connectionOptions = connectionOptions
   }
-
   /*
      * create dump sql file of database
      * @param {Object} options, {host: 'localhost', port: 5432, user: 'postgres', password: 'postgres", dumpPath: '/home/backup',database: 'test'}
@@ -86,7 +85,7 @@ export class PgTools implements IPgTools {
   //   })
   // }
 
-  public async execCommand (command: string) {
+  private async execCommand (command: string) {
     return new Promise((resolve, reject) => {
       const ls = exec(command, (err: Error, stdout, stderr) => {
         if (err) {
@@ -108,22 +107,15 @@ export class PgTools implements IPgTools {
     } else if (!sqlFilePath) {
       throw new Error('sql file path was not provided')
     }
-    return new Promise((resolve, reject) => {
-      process.nextTick(() => {
-        fs.access(sqlFilePath, fs.constants.F_OK, async (err: Error) => {
-          if (err) {
-            throw new Error('Dump sql path doesn\'t exists')
-          } else {
-            try {
-              const { host, port, user, database, password } = this.connectionOptions
-              const command = `psql -h ${host} -p ${port} -U ${user} -f ${sqlFilePath} -d ${database} ${!password ? '--no-password' : ''}`
-              resolve(this.execCommand(command))
-            } catch (err) {
-              reject(err)
-            }
-          }
-        })
-      })
-    })
+    const isExists = await checkFileExists(sqlFilePath)
+    if (isExists) {
+      try {
+        const { host, port, user, database, password } = this.connectionOptions
+        const command = `psql -h ${host} -p ${port} -U ${user} -f ${sqlFilePath} -d ${database} ${!password ? '--no-password' : ''}`
+        return await this.execCommand(command)
+      } catch (err) {
+        throw new Error(err)
+      }
+    }
   }
 }
