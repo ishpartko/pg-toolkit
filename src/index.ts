@@ -102,7 +102,7 @@ interface AppConfig {
   }
 }
 
-function getDefaultConfig ():AppConfig {
+function getDefaultConfig (): AppConfig {
   return {
     db: {
       user: 'postgres',
@@ -113,22 +113,16 @@ function getDefaultConfig ():AppConfig {
   }
 }
 
-function readConfigFile (): Promise<string> {
-  return new Promise((resolve, reject) => {
-    fs.readFile(path.resolve('pg-toolkit.config.json5'), (err, data: Buffer) => {
-      if (err) {
-        return reject(err)
-      }
-      return resolve(data.toString())
-    })
-  })
-}
-
 async function getConfig () {
   const defaultConfig = getDefaultConfig()
-  const configFileData = await readConfigFile()
-  const fileConfigObject = json5.parse(configFileData)
-  return merge(defaultConfig, fileConfigObject)
+  try {
+    const pathConfig = path.resolve('pg-toolkit.config.js')
+    const fileConfigObject = require(pathConfig).default
+    return merge(defaultConfig, fileConfigObject)
+  } catch (err) {
+    console.log(err)
+    return defaultConfig
+  }
 }
 
 async function main () {
